@@ -29,6 +29,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -61,6 +62,7 @@ class FileReport:
     warnings: list = field(default_factory=list)
     unverified: int = 0
     words: int = 0
+    unresolved: list = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -177,6 +179,45 @@ def check_file(path: str, min_refs: int) -> FileReport:
     return rep
 
 
+# NCBI asks for <=3 requests/second without an API key. Being a good citizen
+# is also self-interested: hammering the endpoint earns HTTP 429s, and a mass
+# of 429s silently degrades this whole check into "not counted" — a linter that
+# has quietly stopped linting is worse than no linter, because it still reports
+# success.
+_MIN_INTERVAL = 0.4
+_last_request = [0.0]
+
+
+def _throttled_open(url: str, timeout: float, headers: dict | None = None):
+    """Open a URL, spacing requests and retrying on rate limiting.
+
+    429 and 503 are retried with exponential backoff, honouring Retry-After
+    when the server sends it. Every other status is raised to the caller,
+    which decides whether it means "fabricated" or merely "unreachable".
+    """
+    delays = [1.0, 3.0, 8.0]
+    for attempt in range(len(delays) + 1):
+        wait = _MIN_INTERVAL - (time.monotonic() - _last_request[0])
+        if wait > 0:
+            time.sleep(wait)
+        req = urllib.request.Request(url, headers=headers or {})
+        try:
+            resp = urllib.request.urlopen(req, timeout=timeout)
+            _last_request[0] = time.monotonic()
+            return resp
+        except urllib.error.HTTPError as exc:
+            _last_request[0] = time.monotonic()
+            if exc.code in (429, 503) and attempt < len(delays):
+                retry_after = exc.headers.get("Retry-After") if exc.headers else None
+                try:
+                    backoff = float(retry_after) if retry_after else delays[attempt]
+                except ValueError:
+                    backoff = delays[attempt]
+                time.sleep(min(backoff, 30.0))
+                continue
+            raise
+
+
 def resolve_online(rep: FileReport, timeout: float) -> None:
     """Best-effort network resolution of identifiers. Network failures are
     reported as warnings, never errors — a flaky proxy must not fail CI."""
@@ -190,7 +231,7 @@ def resolve_online(rep: FileReport, timeout: float) -> None:
                     "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
                     f"?db=pubmed&retmode=json&id={pmid.group(1)}"
                 )
-                with urllib.request.urlopen(url, timeout=timeout) as r:
+                with _throttled_open(url, timeout) as r:
                     data = json.load(r)
                 result = data.get("result", {})
                 rec = result.get(pmid.group(1))
@@ -198,23 +239,30 @@ def resolve_online(rep: FileReport, timeout: float) -> None:
                     rep.errors.append(f"[{n}] PMID {pmid.group(1)} does not resolve in PubMed")
             elif nct:
                 url = f"https://clinicaltrials.gov/api/v2/studies/{nct.group(1)}"
-                req = urllib.request.Request(url, headers={"Accept": "application/json"})
-                with urllib.request.urlopen(req, timeout=timeout) as r:
+                with _throttled_open(url, timeout, {"Accept": "application/json"}) as r:
                     if r.status != 200:
                         rep.errors.append(f"[{n}] {nct.group(1)} not found on ClinicalTrials.gov")
             elif doi:
                 url = "https://doi.org/api/handles/" + urllib.parse.quote(doi.group(1))
-                with urllib.request.urlopen(url, timeout=timeout) as r:
+                with _throttled_open(url, timeout) as r:
                     data = json.load(r)
                 if data.get("responseCode") != 1:
                     rep.errors.append(f"[{n}] DOI {doi.group(1)} does not resolve")
         except urllib.error.HTTPError as exc:
             if exc.code in (404, 400):
                 rep.errors.append(f"[{n}] identifier lookup returned {exc.code} — likely not real")
+            elif exc.code in (429, 503):
+                rep.unresolved.append(n)
+                rep.warnings.append(
+                    f"[{n}] STILL RATE-LIMITED after retries — NOT VERIFIED, re-run needed"
+                )
             else:
                 rep.warnings.append(f"[{n}] lookup failed with HTTP {exc.code} (not counted)")
         except Exception as exc:  # network, TLS, timeout, malformed JSON
-            rep.warnings.append(f"[{n}] lookup could not complete ({type(exc).__name__})")
+            rep.unresolved.append(n)
+            rep.warnings.append(
+                f"[{n}] lookup could not complete ({type(exc).__name__}) — NOT VERIFIED"
+            )
 
 
 def collect(paths: list[str]) -> list[str]:
@@ -257,6 +305,7 @@ def main() -> int:
     total_refs = sum(len(r.refs) for r in reports)
     total_words = sum(r.words for r in reports)
     total_unverified = sum(r.unverified for r in reports)
+    total_unresolved = sum(len(r.unresolved) for r in reports)
     failed = [r for r in reports if r.errors or (args.strict and r.warnings)]
 
     for rep in reports:
@@ -274,7 +323,12 @@ def main() -> int:
     print(f"{len(reports)} files | {total_words:,} words | {total_refs} references "
           f"| {total_unverified} [unverified] markers | {len(failed)} failing")
     if args.online:
-        print("identifier resolution: ON (network failures reported as warnings only)")
+        checked = total_refs - total_unresolved
+        print(f"identifier resolution: ON — {checked}/{total_refs} identifiers actually "
+              f"dereferenced, {total_unresolved} could not be reached")
+        if total_unresolved:
+            print("  NOTE: unreached identifiers are NOT verified. Re-run before "
+                  "claiming the corpus is checked.")
     else:
         print("identifier resolution: OFF — run with --online to verify identifiers actually resolve")
 
