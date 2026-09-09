@@ -56,3 +56,26 @@ This distinction is the point. The first run of this tool over the corpus return
 the earlier version folded into a generic "not counted" warning — which, at a glance, looked like a
 clean pass. A linter that has quietly stopped linting is worse than no linter, because it still
 reports success.
+
+## `cite.py`
+
+Retrieve a citation *before* writing it. Give it PMIDs, DOIs, NCT numbers, or a PubMed
+search, and it prints the reference entry in the corpus format, built only from what the
+database returned — so the easy path and the honest path are the same path.
+
+```bash
+python3 tools/cite.py 31821784 10.1056/NEJMoa2012971 NCT04065399   # entries, corpus format
+python3 tools/cite.py --abstract 31821784 32786187                  # read what the paper says
+python3 tools/cite.py --search "quizartinib QuANTUM-First" --max 5  # find candidate PMIDs
+python3 tools/cite.py --nct-detail NCT04093505                      # registry: status, phase, N, why stopped
+python3 tools/cite.py --start 12 31821784 32786187                  # number entries from 12
+```
+
+Sources: NCBI E-utilities (PubMed), Crossref (DOI), ClinicalTrials.gov API v2 (NCT). Requests
+are spaced to stay inside NCBI's rate guidance and retried with backoff on 429/503. An
+identifier that does not resolve is reported as `NOT FOUND — do not cite` and the exit status
+is non-zero.
+
+It prints what the database says. It cannot tell you whether the paper supports the claim you
+are attaching it to — read the abstract (`--abstract`) or the paper for that. Every research
+agent that has written for this corpus since 2026-09-09 was required to use it.
