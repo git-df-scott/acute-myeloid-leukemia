@@ -9,6 +9,30 @@ approvals since 2017, the majority of patients — especially those over 60 — 
 the disease. Remissions have improved substantially. **Cures have not improved nearly as
 much.** This repository exists to hold that distinction steady and work the gap.
 
+
+## Current status — read before using anything here
+
+**The corpus is partial and not yet audited.** As of the latest commit:
+
+| | |
+| --- | --- |
+| Review-layer domains written | 5 of 15 |
+| Reference-layer lesion monographs written | 4 of 14 |
+| Reference-layer drug monographs written | 0 of 15 |
+| Foundational primers written | 0 of 8 |
+| **Files that have passed adversarial citation audit** | **0** |
+| Cross-domain synthesis / cure roadmap | not yet written |
+
+The research run was cut short by an account usage limit, and every citation-audit
+pass died before it ran. The content that exists was written under the evidence rules
+below and carries explicit `[unverified]` markers where its author could not confirm a
+figure — but it has had no independent verification pass, and no expert review at all.
+
+**Practical consequence:** treat every specific number here as unconfirmed until the
+audit column above says otherwise. Do not cite this corpus in a grant, a protocol, or a
+clinical discussion without re-verifying the individual claim against its primary source.
+Progress and unresolved concerns are tracked in [`campaign/AUDIT-LOG.md`](campaign/AUDIT-LOG.md).
+
 ## What this repository is
 
 | Part | Purpose |
