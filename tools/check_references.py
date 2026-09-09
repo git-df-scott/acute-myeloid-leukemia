@@ -35,7 +35,8 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 
-INLINE_MARKER = re.compile(r"\[(\d{1,3})\]")
+# A citation marker is [n], [n,m,...] or [n-m] / [n–m]; whitespace tolerated.
+INLINE_MARKER = re.compile(r"\[(\d{1,3}(?:\s*[,\-\u2013]\s*\d{1,3})*)\]")
 REF_ENTRY = re.compile(r"^\s{0,3}(?:\[)?(\d{1,3})(?:\])?[.)]?\s+(.*)$")
 REFS_HEADING = re.compile(r"^#{1,4}\s*(?:\d+\.\s*)?references\b", re.IGNORECASE)
 ANY_HEADING = re.compile(r"^#{1,4}\s+")
@@ -129,7 +130,14 @@ def check_file(path: str, min_refs: int) -> FileReport:
     scrub = re.sub(r"`[^`]*`", "", scrub)
     # Markdown links like [text](url) and reference-style [1]: are not citations.
     scrub = re.sub(r"\]\([^)]*\)", "]", scrub)
-    rep.cited = {int(n) for n in INLINE_MARKER.findall(scrub)}
+    rep.cited = set()
+    for group in INLINE_MARKER.findall(scrub):
+        for part in re.split(r"\s*,\s*", group):
+            if re.search(r"[\-\u2013]", part):
+                lo, hi = (int(x) for x in re.split(r"\s*[\-\u2013]\s*", part))
+                rep.cited.update(range(lo, hi + 1))
+            else:
+                rep.cited.add(int(part))
 
     if not rep.refs:
         if rep.words > 400:
